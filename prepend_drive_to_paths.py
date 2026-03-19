@@ -3,36 +3,26 @@
 """
 Filter script for vcshell database commands.
 
-This script reads command lines from a vcshell getallcmdlines output and
-prepends a drive prefix (for example `X:/`) to each include path passed with
-`-I`. By default it reads `commands.txt` from the same directory and writes
-`commands_filtered.txt`.
+This script reads command lines from a vcshell getallcmdlines output and,
+when both a `--drive` and a `--base` substring are provided, replaces the
+portion of each `-I` include path up to and including that base substring
+with the specified drive prefix (for example `X:/`). By default it reads
+`commands.txt` from the same directory and writes `commands_filtered.txt`.
 
 Usage examples:
     # default: read commands.txt, write commands_filtered.txt, do nothing
     python prepend_drive_to_paths.py
 
-    # specify input, output, and use drive Z
-        python prepend_drive_to_paths.py commands.txt commands_filtered.txt -d Z
-
-    # only change the drive (use default files)
-    python prepend_drive_to_paths.py -d Z
-
-        # replace a base-directory substring inside `-I` paths with the drive
-        python prepend_drive_to_paths.py -d Z -b "../../SIP/CBD2401322_D01"
+    # specify input, output, and use drive/base replacement
+    python prepend_drive_to_paths.py commands.txt commands_filtered.txt -d Z -b "../../SIP/CBD2401322_D01"
 
 Notes:
-        - By default the script is a no-op and will not modify include paths.
-            To enable modifications specify `-d/--drive` with a drive letter.
-        - The script handles both `-I path` and `-Ipath` forms and preserves
-            quoted paths.
-        - The `-b/--base` option (optional) takes a substring that will be searched
-            for inside each include path. If the substring is found the portion up
-            to and including that base is replaced with `<DRIVE>:/` and the remainder
-            of the path is kept (leading separators removed). `--base` only has an
-            effect when `--drive` is also provided. If `--base` is not provided and
-            `--drive` is given the script will prepend `<DRIVE>:/` to the entire
-            include path.
+    - The script is a no-op by default and will not modify include paths.
+    - Modifications occur only when BOTH `-d/--drive` and `-b/--base` are provided.
+      In that case the script replaces the portion of an `-I` include path up to
+      and including the provided base substring with `<DRIVE>:/` and preserves the
+      remainder of the path (leading separators removed).
+    - The script handles both `-I path` and `-Ipath` forms and preserves quoted paths.
 """
 
 import sys
@@ -44,13 +34,13 @@ import argparse
 def prepend_drive_to_includes(cmd: str, drive: str, base: str | None = None) -> str:
     """Modify `-I` include paths in a command line.
 
-    If `base` is provided and the base substring is found inside an include
-    path, the portion of the path up to/including the base is replaced with
-    `<DRIVE>:/` and the remainder is preserved. If `base` is not provided the
-    behaviour falls back to prepending `<DRIVE>:/` to each include path.
-
-    Handles both `-I path` and `-Ipath` forms, preserves quotes if present,
-    and avoids touching other multi-letter options like `-imultilib`.
+    If `base` is provided and `drive` is provided and the base substring is
+    found inside an include path, the portion of the path up to/including
+    the base is replaced with `<DRIVE>:/` and the remainder is preserved.
+    The function performs no modifications unless BOTH `drive` and `base`
+    are supplied. Handles both `-I path` and `-Ipath` forms, preserves
+    quotes if present, and avoids touching other multi-letter options like
+    `-imultilib`.
     """
     drive_letter = str(drive).upper().rstrip(':/') if drive is not None else None
     prefix = f"{drive_letter}:/" if drive_letter else None
@@ -72,29 +62,22 @@ def prepend_drive_to_includes(cmd: str, drive: str, base: str | None = None) -> 
         quoted = path.startswith('"') and path.endswith('"')
         inner = path[1:-1] if quoted else path
 
-        # If no drive provided and no base action possible, do nothing.
-        if drive_letter is None and not base:
+        # Only perform replacements when BOTH a drive and a base substring are
+        # provided. If either is missing, leave the include unchanged.
+        if not (base and drive_letter):
             return m.group(0)
 
         # If base provided and drive provided, replace up to base with drive prefix.
-        if base and drive_letter is not None:
-            idx = inner.find(base)
-            if idx != -1:
-                # take the suffix after the matched base
-                suffix = inner[idx + len(base):]
-                # remove leading separators from suffix
-                suffix = suffix.lstrip('/\\')
-                new_inner = f"{drive_letter}:/{suffix}" if suffix else f"{drive_letter}:/"
-                return f"{flag}{sep}\"{new_inner}\"" if quoted else f"{flag}{sep}{new_inner}"
+        idx = inner.find(base)
+        if idx != -1:
+            # take the suffix after the matched base
+            suffix = inner[idx + len(base):]
+            # remove leading separators from suffix
+            suffix = suffix.lstrip('/\\')
+            new_inner = f"{drive_letter}:/{suffix}" if suffix else f"{drive_letter}:/"
+            return f"{flag}{sep}\"{new_inner}\"" if quoted else f"{flag}{sep}{new_inner}"
 
-        # If drive provided (and base not used) prepend drive prefix to the whole path
-        if drive_letter is not None:
-            if quoted:
-                return f'{flag}{sep}"{drive_letter}:/{inner}"'
-            else:
-                return f'{flag}{sep}{drive_letter}:/{inner}'
-
-        # otherwise leave unchanged
+        # If base not found, leave unchanged
         return m.group(0)
 
     return pattern.sub(_repl, cmd)
@@ -127,11 +110,11 @@ def process_lines(input_lines, drive: str, base: str | None = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepend drive letter to -I include paths in vcshell command dumps')
+    parser = argparse.ArgumentParser(description='Replace base substrings in -I include paths with a drive prefix (requires --drive and --base)')
     parser.add_argument('input_file', nargs='?', help='Input file (default: commands.txt in script dir)')
     parser.add_argument('output_file', nargs='?', help='Output file (default: <input>_filtered or commands_filtered.txt)')
-    parser.add_argument('-d', '--drive', default=None, help='Drive letter to prepend (when provided)')
-    parser.add_argument('-b', '--base', default=None, help='Base directory substring to replace with the drive (optional; requires --drive)')
+    parser.add_argument('-d', '--drive', default=None, help='Drive letter to use when replacing the provided base substring')
+    parser.add_argument('-b', '--base', default=None, help='Base directory substring to replace with the drive (required together with --drive)')
     args = parser.parse_args()
 
     if args.input_file:
