@@ -1,0 +1,6 @@
+# ignore built and generated files
+*.txt
+*.db
+*.zip
+*.CFG
+.vscode/
