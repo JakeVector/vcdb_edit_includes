@@ -6,13 +6,8 @@ echo "C_COMPILE_CMD: tricore-gcc" > CCAST_.CFG
 echo "Running vcdb get commands"
 %VECTORCAST_DIR%\vcdb --db=vcshell.db getallcmdlines --all > commands.txt
 
+echo "Filtering and prepending drive to paths"
+python prepend_drive_to_paths.py commands.txt commands_filtered.txt -d X
 
-REM subst X: .
-
-REM %VECTORCAST_DIR%\vcdb --db=vcshell.db --filter=tricore-gcc.exe dumpcommands > commands.txt
-
-REM %VECTORCAST_DIR%\vcdb --db=vcshell.db --filter=tricore-gcc dumpcommands > commands.txt
-
-REM python filter_script.py
-
-REM %VECTORCAST_DIR%\vcshell --db=vcshell_new.db --inputcmds=commands.txt putcommand
+echo "Importing filtered commands into new database"
+%VECTORCAST_DIR%\vcshell --db=vcshell_new.db --inputcmds=commands_filtered.txt putcommand
