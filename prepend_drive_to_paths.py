@@ -30,62 +30,37 @@ import os
 import re
 import argparse
 
+def replace_base_anywhere(s: str, drive: str, base: str | None) -> str:
+    """Replace occurrences of the provided base substring anywhere in `s`.
 
-def prepend_drive_to_includes(cmd: str, drive: str, base: str | None = None) -> str:
-    """Modify `-I` include paths in a command line.
-
-    If `base` is provided and `drive` is provided and the base substring is
-    found inside an include path, the portion of the path up to/including
-    the base is replaced with `<DRIVE>:/` and the remainder is preserved.
-    The function performs no modifications unless BOTH `drive` and `base`
-    are supplied. Handles both `-I path` and `-Ipath` forms, preserves
-    quotes if present, and avoids touching other multi-letter options like
-    `-imultilib`.
+    Matches both forward- and back-slash separators in the provided base
+    and removes any separator characters that immediately follow the base
+    so the resulting replacement becomes `<DRIVE>:/<suffix>`.
     """
-    drive_letter = str(drive).upper().rstrip(':/') if drive is not None else None
-    prefix = f"{drive_letter}:/" if drive_letter else None
+    if not (drive and base):
+        return s
 
-    pattern = re.compile(r'(-I)(\s*)(".*?"|\S+)')
+    drive_letter = str(drive).upper().rstrip(':/')
+    # Normalize the base for building a regex that matches either slash type
+    base_norm = base.replace('\\', '/').rstrip('/')
+    # Escape then allow either slash as separator between path segments
+    pattern_str = re.escape(base_norm).replace('/', r'[\\/]') + r'[\\/]*'
+    pattern = re.compile(pattern_str, flags=re.IGNORECASE)
 
-    def _repl(m: re.Match) -> str:
-        flag = m.group(1)
-        sep = m.group(2)
-        path = m.group(3)
-
-        # If there is no separating space and the following token doesn't look
-        # like a path (e.g. it's a multi-letter option), skip replacing.
-        if sep == "":
-            if not (path.startswith('.') or path.startswith('/') or path.startswith('..') or (len(path) > 1 and path[1] == ':') or path.startswith('~')):
-                return m.group(0)
-
-        # Work with the raw inner path (without quotes) for matching.
-        quoted = path.startswith('"') and path.endswith('"')
-        inner = path[1:-1] if quoted else path
-
-        # Only perform replacements when BOTH a drive and a base substring are
-        # provided. If either is missing, leave the include unchanged.
-        if not (base and drive_letter):
-            return m.group(0)
-
-        # If base provided and drive provided, replace up to base with drive prefix.
-        idx = inner.find(base)
-        if idx != -1:
-            # take the suffix after the matched base
-            suffix = inner[idx + len(base):]
-            # remove leading separators from suffix
-            suffix = suffix.lstrip('/\\')
-            new_inner = f"{drive_letter}:/{suffix}" if suffix else f"{drive_letter}:/"
-            return f"{flag}{sep}\"{new_inner}\"" if quoted else f"{flag}{sep}{new_inner}"
-
-        # If base not found, leave unchanged
-        return m.group(0)
-
-    return pattern.sub(_repl, cmd)
+    replacement = f"{drive_letter}:" + chr(92)
+    # Use a function replacement so that backslashes in `replacement` are
+    # inserted literally and do not get interpreted as escape sequences
+    # in the replacement template.
+    return pattern.sub(lambda m: replacement, s)
 
 
 def process_lines(input_lines, drive: str, base: str | None = None):
     output_lines = []
     filtered_count = 0
+    # When both drive and base are provided, perform a global replacement of
+    # the base substring anywhere in each line. Otherwise, preserve the
+    # previous behavior of only attempting to update `-I` include tokens.
+    do_global = bool(drive and base)
 
     for raw in input_lines:
         line = raw.rstrip('\n')
@@ -93,18 +68,32 @@ def process_lines(input_lines, drive: str, base: str | None = None):
             continue
 
         if line.startswith("dir::"):
-            output_lines.append(line)
+            out_line = line
+            if do_global:
+                out_line = replace_base_anywhere(out_line, drive, base)
+            output_lines.append(out_line)
             continue
 
         if line.startswith("cmd::"):
             cmd_payload = line[len("cmd::"):]
-            filtered_cmd = prepend_drive_to_includes(cmd_payload, drive, base)
+            if do_global:
+                # Replace base occurrences anywhere in the command payload.
+                filtered_cmd = replace_base_anywhere(cmd_payload, drive, base)
+            else:
+                # No global replacement requested — leave the command payload
+                # unchanged (previous include-only helper removed).
+                filtered_cmd = cmd_payload
+
             output_lines.append(f"cmd::{filtered_cmd}")
             filtered_count += 1
             continue
 
-        # Pass through unknown/unprefixed lines unchanged.
-        output_lines.append(line)
+        # Other lines: apply global replacement when requested, otherwise pass
+        # them through unchanged.
+        out_line = line
+        if do_global:
+            out_line = replace_base_anywhere(out_line, drive, base)
+        output_lines.append(out_line)
 
     return output_lines, filtered_count
 
